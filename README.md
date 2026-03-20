@@ -1,5 +1,5 @@
 [README.md](https://github.com/user-attachments/files/26148987/README.md)
-# Automated Reinforcement Training for Isaac Lab
+# Automated Reinforcement Learning Training for Isaac Lab with Claude Code
 
 An automated RL training loop powered by [Claude Code](https://claude.ai/claude-code) that trains, evaluates visually, tunes hyperparameters, and iterates — designed to run unattended (e.g., overnight).
 
