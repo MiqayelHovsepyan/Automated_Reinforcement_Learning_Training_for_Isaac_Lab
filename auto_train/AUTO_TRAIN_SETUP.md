@@ -23,31 +23,56 @@ This repo contains:
 
 ```
 Automated_Reinforcement_Learning_Training_for_Isaac_Lab/
-  auto_train (scripts)/
-    __init__.py
-    run_phase.py               # orchestrator: train -> metrics -> play -> frames -> report
-    train_with_overrides.py    # train.py + JSON override support
-    analyze_metrics.py         # TensorBoard -> JSON
-    extract_frames.py          # MP4 -> PNG frames
-  SKILL.md                     # Claude Code skill definition
+  auto_train/
+    SKILL.md                     # Claude Code skill definition
+    AUTO_TRAIN_SETUP.md          # This setup guide
+    README.md                    # Project documentation
+    resources/                   # Python scripts
+      __init__.py
+      run_phase.py               # orchestrator: train -> metrics -> play -> frames -> report
+      train_with_overrides.py    # train.py + JSON override support
+      analyze_metrics.py         # TensorBoard -> JSON
+      extract_frames.py          # MP4 -> PNG frames
+      wait_for_phase.py          # blocks until training completes (replaces sleep-poll loop)
 ```
 
-### Step 2 — Copy scripts and skill into your project
+### Step 2 — Copy the auto_train folder into your project
 
 ```bash
-# Copy auto-train scripts
-cp -r "Automated_Reinforcement_Learning_Training_for_Isaac_Lab/auto_train (scripts)/" your_project/scripts/auto_train/
-
-# Copy the skill definition
-mkdir -p your_project/.claude/skills/auto-train/
-cp Automated_Reinforcement_Learning_Training_for_Isaac_Lab/SKILL.md your_project/.claude/skills/auto-train/SKILL.md
+# Single copy — everything goes into .claude/skills/
+cp -r Automated_Reinforcement_Learning_Training_for_Isaac_Lab/auto_train/ your_project/.claude/skills/auto_train/
 ```
 
-**Why:** `run_phase.py` runs the full pipeline per iteration. Claude reads the output report + frames to decide what to change next. `SKILL.md` is loaded when you invoke `/auto-train` and contains Claude's complete instructions for the training loop.
+Your project structure should look like:
+
+```
+your_project/
+├── scripts/
+│   └── rsl_rl/
+│       ├── train.py          # (your existing train script)
+│       ├── play.py           # (your existing play script)
+│       └── cli_args.py       # (your existing CLI args)
+├── .claude/
+│   └── skills/
+│       └── auto_train/
+│           ├── SKILL.md
+│           ├── resources/
+│           │   ├── __init__.py
+│           │   ├── run_phase.py
+│           │   ├── train_with_overrides.py
+│           │   ├── analyze_metrics.py
+│           │   ├── extract_frames.py
+│           │   └── wait_for_phase.py
+│           └── experiments/        # (created automatically)
+│               └── .scratch/
+└── logs/                           # (created automatically)
+```
+
+**Why:** Everything is self-contained in one folder. The skill, scripts, and experiments all live together.
 
 ### Step 3 — Adapt imports to your project
 
-In `scripts/auto_train/train_with_overrides.py`, change:
+In `.claude/skills/auto_train/resources/train_with_overrides.py`, change:
 
 ```python
 import cf_lab.tasks  # noqa: F401
@@ -59,7 +84,7 @@ import your_package.tasks  # noqa: F401
 
 ### Step 4 — Adapt SKILL.md to your project
 
-Update these in `.claude/skills/auto-train/SKILL.md`:
+Update these in `.claude/skills/auto_train/SKILL.md`:
 
 1. **Working directory:** `cd cf_lab` -> `cd your_project_dir`
 2. **Venv path:** Update `.venv/bin/python` if your venv is elsewhere
@@ -89,14 +114,6 @@ Isaac-Velocity-Flat-Ayg-Play-v0   # play (fewer envs, for video recording)
 
 If you don't have `-Play-v0` variants, register them (inherit training config, reduce `num_envs`).
 
-### Step 7 — Create experiments directory
-
-```bash
-mkdir -p experiments/.scratch
-```
-
-**Why:** Stores override files, report files, and session journals.
-
 ---
 
 ## Part 2: Running
@@ -117,13 +134,13 @@ claude --dangerously-skip-permissions
 ### Step 3 — Start auto-train
 
 ```
-/auto-train <task_id> level <1|2> on <gpu> <vram> [optional notes]
+/auto_train <task_id> level <1|2> on <gpu> <vram> [optional notes]
 ```
 
 Examples:
 ```
-/auto-train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 3060 12GB
-/auto-train Isaac-WTW-Flat-Ayg-v0 level 2 on RTX 4090 24GB focus on foot clearance
+/auto_train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 3060 12GB
+/auto_train Isaac-WTW-Flat-Ayg-v0 level 2 on RTX 4090 24GB focus on foot clearance
 ```
 
 | Argument | Meaning |
@@ -140,8 +157,8 @@ Claude will iterate up to 15 times, then run a final production training with th
 ### Step 5 — Check results
 
 ```bash
-cat experiments/*/journal.md    # what Claude tried and learned
-ls -lt logs/rsl_rl/*/           # training checkpoints
+cat .claude/skills/auto_train/experiments/*/journal.md    # what Claude tried and learned
+ls -lt logs/rsl_rl/*/                                      # training checkpoints
 ```
 
 ---
@@ -153,7 +170,7 @@ ls -lt logs/rsl_rl/*/           # training checkpoints
 
 **Resume after disconnect:** The current training survives (detached via `nohup`). Start a new session:
 ```
-Continue auto-train, read journal at experiments/<name>/journal.md
+Continue auto-train, read journal at .claude/skills/auto_train/experiments/<name>/journal.md
 ```
 
 **Safety guarantees:**
@@ -168,6 +185,7 @@ Continue auto-train, read journal at experiments/<name>/journal.md
 | Wrong Python (system vs venv) | Uses `.venv/bin/python` explicitly |
 | Training crashes | Crash handler writes report so Claude detects it |
 | OOM kill | PID tracked — Claude detects dead process |
+| Bad override JSON | Pre-flight validation catches format errors before Isaac Sim boots |
 
 ---
 
@@ -176,7 +194,8 @@ Continue auto-train, read journal at experiments/<name>/journal.md
 | Error | Fix |
 |-------|-----|
 | `ModuleNotFoundError: isaaclab` | Wrong Python. Check `.venv/bin/python -c "import isaaclab"`. Update venv path in SKILL.md. |
-| No play video found | `-Play-v0` task not registered, or play crashed. Check `experiments/.scratch/current_phase.log`. |
+| No play video found | `-Play-v0` task not registered, or play crashed. Check `.claude/skills/auto_train/experiments/.scratch/current_phase.log`. |
 | OOM crashes | Reduce `num_envs` in SKILL.md device scaling section. |
 | Claude stopped after 1 iteration | Forgot `--dangerously-skip-permissions`. |
 | Report stuck on "running" | Process OOM-killed. Check `dmesg \| grep -i oom`. Reduce `num_envs`. |
+| `validation_error` in report | Override JSON has wrong format (nested dict instead of flat dot-paths). See SKILL.md Override JSON Format section. |

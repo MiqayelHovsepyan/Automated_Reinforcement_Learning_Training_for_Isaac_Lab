@@ -6,7 +6,7 @@
 """Extract evenly-spaced frames from an MP4 video as PNG images.
 
 Usage:
-    python scripts/auto_train/extract_frames.py --video <path.mp4> --output-dir <dir> [--num-frames 8]
+    python .claude/skills/auto_train/resources/extract_frames.py --video <path.mp4> --output-dir <dir> [--num-frames 8]
 """
 
 import argparse

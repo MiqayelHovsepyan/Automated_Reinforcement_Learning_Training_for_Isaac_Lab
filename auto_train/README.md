@@ -1,4 +1,3 @@
-[README.md](https://github.com/user-attachments/files/26148987/README.md)
 # Automated Reinforcement Learning Training for Isaac Lab with Claude Code
 
 An automated RL training loop powered by [Claude Code](https://claude.ai/claude-code) that trains, evaluates visually, tunes hyperparameters, and iterates — designed to run unattended (e.g., overnight).
@@ -9,19 +8,19 @@ Built for quadruped robots trained in [NVIDIA Isaac Lab](https://github.com/isaa
 
 Claude Code acts as an expert RL engineer in a loop:
 
-1. **Reads** your task's env config (rewards, observations, terminations, PPO hyperparams)
+1. **Analyzes** reward terms mathematically before training (thresholds, feasibility)
 2. **Writes** parameter overrides as JSON (no source file edits in Level 1)
 3. **Launches** training via `run_phase.py` as a detached process
-4. **Polls** for completion every ~2 minutes
+4. **Waits** for completion using `wait_for_phase.py` (blocks until done, shows progress)
 5. **Analyzes** TensorBoard metrics + extracted video frames (visual gait inspection)
 6. **Logs** everything to a journal for reproducibility and resumability
-7. **Repeats** with tuned parameters until satisfied, then runs a final production training
+7. **Repeats** with tuned parameters (one variable per iteration) until satisfied, then runs a final production training
 
 ```
 ┌─────────────────────────────────────────────────────┐
 │                  Claude Code (AI Agent)              │
 │                                                      │
-│   Reason → Write Overrides → Launch → Poll → Analyze │
+│   Analyze → Write Overrides → Launch → Wait → Analyze│
 │       ↑                                    │         │
 │       └────────────── Repeat ──────────────┘         │
 └─────────────────────────────────────────────────────┘
@@ -42,12 +41,13 @@ Claude Code acts as an expert RL engineer in a loop:
 
 | File | Description |
 |------|-------------|
-| `auto_train (scripts)/run_phase.py` | Orchestrator: train → metrics → play → frames → report |
-| `auto_train (scripts)/train_with_overrides.py` | Modified Isaac Lab `train.py` with `--overrides-file` JSON support |
-| `auto_train (scripts)/analyze_metrics.py` | Extracts TensorBoard events into structured JSON (uses `tbparse`) |
-| `auto_train (scripts)/extract_frames.py` | Extracts evenly-spaced PNG frames from rollout videos (uses OpenCV) |
-| `auto_train (scripts)/__init__.py` | Python package marker |
-| `SKILL.md` | Claude Code skill definition that drives the entire auto-train loop |
+| `auto_train/resources/run_phase.py` | Orchestrator: train → metrics → play → frames → report. Writes progress updates during training. |
+| `auto_train/resources/train_with_overrides.py` | Modified Isaac Lab `train.py` with `--overrides-file` JSON support |
+| `auto_train/resources/analyze_metrics.py` | Extracts TensorBoard events into structured JSON (uses `tbparse`) |
+| `auto_train/resources/extract_frames.py` | Extracts evenly-spaced PNG frames from rollout videos (uses OpenCV) |
+| `auto_train/resources/wait_for_phase.py` | Blocks until training completes, prints final report (replaces sleep-poll loop) |
+| `auto_train/resources/__init__.py` | Python package marker |
+| `auto_train/SKILL.md` | Claude Code skill definition that drives the entire auto-train loop |
 
 ## Setup
 
@@ -60,25 +60,11 @@ Claude Code acts as an expert RL engineer in a loop:
 
 ### Installation
 
-1. **Copy the scripts** into your Isaac Lab project:
+**Single-folder copy** — everything goes into `.claude/skills/`:
 
 ```bash
-# From your Isaac Lab project root (e.g., cf_lab/)
-cp -r /path/to/Automated_Reinforcement_Training_for_Isaac/auto_train\ \(scripts\)/ scripts/auto_train/
-```
-
-2. **Copy the skill file** into your Claude Code skills directory:
-
-```bash
-mkdir -p .claude/skills/auto-train/
-cp /path/to/Automated_Reinforcement_Training_for_Isaac/SKILL.md .claude/skills/auto-train/SKILL.md
-```
-
-3. **Install Python dependencies** (inside your Isaac Lab venv):
-
-```bash
-source .venv/bin/activate
-uv pip install tbparse opencv-python-headless
+# From your Isaac Lab project root
+cp -r /path/to/Automated_Reinforcement_Learning_Training_for_Isaac_Lab/auto_train/ .claude/skills/auto_train/
 ```
 
 Your project structure should look like:
@@ -86,22 +72,33 @@ Your project structure should look like:
 ```
 your_isaac_lab_project/
 ├── scripts/
-│   ├── auto_train/
-│   │   ├── __init__.py
-│   │   ├── run_phase.py
-│   │   ├── train_with_overrides.py
-│   │   ├── analyze_metrics.py
-│   │   └── extract_frames.py
 │   └── rsl_rl/
 │       ├── train.py          # (your existing train script)
 │       └── play.py           # (your existing play script)
 ├── .claude/
 │   └── skills/
-│       └── auto-train/
-│           └── SKILL.md
-├── experiments/              # (created automatically)
-└── logs/                     # (created automatically)
+│       └── auto_train/
+│           ├── SKILL.md
+│           ├── resources/
+│           │   ├── __init__.py
+│           │   ├── run_phase.py
+│           │   ├── train_with_overrides.py
+│           │   ├── analyze_metrics.py
+│           │   ├── extract_frames.py
+│           │   └── wait_for_phase.py
+│           └── experiments/          # (created automatically)
+│               └── .scratch/
+└── logs/                             # (created automatically)
 ```
+
+Then install Python dependencies (inside your Isaac Lab venv):
+
+```bash
+source .venv/bin/activate
+uv pip install tbparse opencv-python-headless
+```
+
+See [AUTO_TRAIN_SETUP.md](AUTO_TRAIN_SETUP.md) for detailed step-by-step instructions.
 
 ## Usage
 
@@ -110,7 +107,7 @@ your_isaac_lab_project/
 In Claude Code, invoke the skill:
 
 ```
-/auto-train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 4090 24GB
+/auto_train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 4090 24GB
 ```
 
 **Arguments format:** `<task_name> level <1|2> on <device_info> [optional notes]`
@@ -125,13 +122,13 @@ In Claude Code, invoke the skill:
 
 ```
 # Basic flat terrain training
-/auto-train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 3060 12GB
+/auto_train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 3060 12GB
 
 # Full tuning with domain hints
-/auto-train Isaac-Velocity-Rough-Ayg-v0 level 2 on A100 80GB robot tends to stumble on stairs, previous best was 15.0
+/auto_train Isaac-Velocity-Rough-Ayg-v0 level 2 on A100 80GB robot tends to stumble on stairs, previous best was 15.0
 
 # Overnight unattended run
-claude --dangerously-skip-permissions "/auto-train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 4090 24GB"
+claude --dangerously-skip-permissions "/auto_train Isaac-Velocity-Flat-Ayg-v0 level 1 on RTX 4090 24GB"
 ```
 
 ### Controls During Training
@@ -149,7 +146,7 @@ While auto-train is running, you can type:
 If a conversation disconnects, start a new one and say:
 
 ```
-Continue auto-train, read journal at experiments/<name>/journal.md
+Continue auto-train, read journal at .claude/skills/auto_train/experiments/<name>/journal.md
 ```
 
 Claude will read the journal, pick up from the last iteration, and continue.
@@ -177,18 +174,19 @@ Level 1 tuning uses JSON override files to modify parameters without touching so
 }
 ```
 
-- Dot-path keys map to `@configclass` attribute paths (e.g., `rewards.gait.weight`)
+- **Flat dot-path keys** map to `@configclass` attribute paths (e.g., `rewards.gait.weight`)
 - `agent.*` prefixed keys apply to the RSL-RL agent config
 - All other keys apply to the environment config
 - Type casting is automatic (matches existing config types)
 - Original source files remain untouched
+- **Pre-flight validation** catches format errors (nested dicts, invalid JSON) before Isaac Sim boots
 
 ## Output Structure
 
 Each auto-train session produces:
 
 ```
-experiments/<experiment_name>/
+.claude/skills/auto_train/experiments/<experiment_name>/
 └── journal.md                    # Full log of every iteration
 
 logs/rsl_rl/<task>/
@@ -206,48 +204,16 @@ logs/rsl_rl/<task>/
         └── play/*.mp4            # Policy rollout video
 ```
 
-## Script Details
-
-### `run_phase.py` — Orchestrator
-
-Coordinates the full pipeline as a single detached process:
-
-1. Launches `train_with_overrides.py` as a subprocess
-2. Optionally monitors training with abort criteria (plateau detection, reward collapse, minimum thresholds)
-3. Runs `analyze_metrics.py` to extract TensorBoard data
-4. Runs `play.py` to generate a rollout video
-5. Runs `extract_frames.py` to extract PNG frames for visual inspection
-6. Writes a `phase_report.json` (polled by Claude for completion)
-
-**Key flags:**
-- `--monitor-interval <seconds>`: Enable real-time abort monitoring
-- `--abort-plateau-patience <iters>`: Stop if reward plateaus
-- `--abort-min-reward-at <iter:value>`: Stop if reward too low after N iterations
-- `--abort-episode-length-drop <ratio>`: Stop if reward collapses from peak
-- `--report-path <path>`: External status file for polling
-
-### `train_with_overrides.py` — Training with JSON Overrides
-
-A modified version of the standard Isaac Lab RSL-RL `train.py` that adds `--overrides-file` support. Override files are JSON dicts of dot-path → value pairs applied at runtime.
-
-### `analyze_metrics.py` — TensorBoard to JSON
-
-Reads TensorBoard event files and produces structured JSON with:
-- Per-scalar statistics (final, mean, std, max, min, trend)
-- Separate reward term breakdown
-- Trend analysis (improving / stable / degrading)
-
-### `extract_frames.py` — Video Frame Extraction
-
-Extracts evenly-spaced PNG frames from MP4 videos, skipping the initial 10% of frames (Isaac Sim often renders black initially). Produces a manifest JSON for programmatic access.
-
 ## Key Design Decisions
 
+- **Pre-training reward analysis**: Before any training, reward terms are mathematically analyzed for feasibility — prevents wasting iterations on misconfigured thresholds.
+- **Single-variable tuning**: Each iteration changes one variable so results can be attributed. Hypotheses are logged in the journal.
 - **Visual inspection is mandatory**: Metrics alone cannot catch reward hacking. Claude reads the extracted frames every iteration to assess gait quality.
+- **Progress-aware waiting**: `run_phase.py` writes progress (iteration, reward, ETA) to the report file during training. `wait_for_phase.py` blocks until done instead of polling.
+- **Pre-flight validation**: Override JSON is validated for format errors before Isaac Sim boots, catching mistakes in milliseconds.
 - **Detached processes**: Training runs via `nohup setsid` to survive Claude Code timeouts and conversation disconnects.
 - **Journal-based resumability**: Everything is logged to `journal.md`, so training can resume from any point after a disconnect.
-- **Type-safe overrides**: The override system automatically casts JSON values to match existing config types (bool, int, float, list, etc.).
-- **Crash safety**: `run_phase.py` writes crash status to the report file so Claude never gets stuck polling a dead process.
+- **Self-contained folder**: The entire auto-train system lives in `.claude/skills/auto_train/` — single copy to set up on any project.
 
 ## License
 

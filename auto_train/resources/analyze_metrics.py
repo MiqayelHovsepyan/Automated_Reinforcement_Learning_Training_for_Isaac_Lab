@@ -6,7 +6,7 @@
 """Extract TensorBoard metrics from a training run and output as JSON.
 
 Usage:
-    python scripts/auto_train/analyze_metrics.py --log-dir <path> [--output <path>/metrics.json]
+    python .claude/skills/auto_train/resources/analyze_metrics.py --log-dir <path> [--output <path>/metrics.json]
 """
 
 import argparse
