@@ -258,6 +258,12 @@ def main():
                         help="Number of environments for play/video recording (default: 4). "
                              "Use 2-4 for clear side-view video of individual robots.")
     parser.add_argument("--skip-play", action="store_true", default=False, help="Skip play and video extraction.")
+    parser.add_argument("--skip-eval", action="store_true", default=False,
+                        help="Skip evaluate_policy.py (numerical + distribution-shift evaluation).")
+    parser.add_argument("--eval-steps", type=int, default=1000,
+                        help="Steps per env for evaluate_policy.py (default 1000 ≈ 20 s @ 50 Hz).")
+    parser.add_argument("--skip-parse-env", action="store_true", default=False,
+                        help="Skip parse_env.py (env schema dump for tuner context).")
 
     # Monitoring / abort criteria
     parser.add_argument("--monitor-interval", type=int, default=0,
@@ -315,6 +321,37 @@ def main():
     status = "completed"
     early_stop_reason = None
     iterations_completed = None  # Will be resolved from metrics after training
+    env_schema_paths = {"json": None, "md": None}  # Filled by Step 0 below
+
+    # ── Step 0: Parse env schema (context injection for tuner) ──
+    # Skipped if a schema already exists in the scratch dir — the schema only
+    # changes when env source edits happen (Level 2); Claude should delete
+    # env_schema.md after editing source to force regeneration.
+    if not args.skip_parse_env:
+        try:
+            scratch_dir = os.path.dirname(os.path.abspath(args.report_path)) if args.report_path else os.getcwd()
+            schema_json = os.path.join(scratch_dir, "env_schema.json")
+            schema_md = os.path.join(scratch_dir, "env_schema.md")
+            if os.path.isfile(schema_md) and os.path.isfile(schema_json):
+                env_schema_paths = {"json": schema_json, "md": schema_md}
+                print(f"[INFO] Reusing existing env schema at {schema_md}")
+            else:
+                parse_cmd = [
+                    sys.executable, os.path.join(script_dir, "parse_env.py"),
+                    f"--task={args.task}",
+                    f"--output-json={schema_json}",
+                    f"--output-md={schema_md}",
+                    "--headless",
+                ]
+                print(f"[INFO] Parsing env schema: {' '.join(parse_cmd)}")
+                r = subprocess.run(parse_cmd, cwd=cf_lab_dir, capture_output=True, text=True, timeout=600)
+                if r.returncode == 0:
+                    env_schema_paths = {"json": schema_json, "md": schema_md}
+                    print(f"[INFO] env_schema.md → {schema_md}")
+                else:
+                    print(f"[WARN] parse_env.py failed (rc={r.returncode}): {r.stderr[-500:]}")
+        except Exception as e:
+            print(f"[WARN] parse_env step skipped due to error: {e}")
 
     # ── Pre-flight: validate overrides JSON ──
     if args.overrides_file:
@@ -582,6 +619,46 @@ def main():
         else:
             print("[WARNING] No checkpoint found, skipping play.")
 
+    # ── Step 4b: Numerical + distribution-shift evaluation ──
+    evaluation_report = {}
+    eval_report_path = None
+    if not args.skip_eval and not args.skip_play and status != "failed":
+        print("\n" + "=" * 60)
+        print("[PHASE] Step 4b: Numerical policy evaluation")
+        print("=" * 60)
+        checkpoint = find_latest_checkpoint(log_dir)
+        if checkpoint:
+            eval_report_path = os.path.join(log_dir, "eval_report.json")
+            eval_cmd = [
+                sys.executable, os.path.join(script_dir, "evaluate_policy.py"),
+                f"--task={args.play_task}",
+                f"--checkpoint={checkpoint}",
+                f"--report-path={eval_report_path}",
+                f"--eval-steps={args.eval_steps}",
+                f"--num-envs={args.num_play_envs}",
+            ]
+            if args.headless:
+                eval_cmd.append("--headless")
+            print(f"[INFO] Eval command: {' '.join(eval_cmd)}")
+            eval_proc = subprocess.run(
+                eval_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=cf_lab_dir,
+                env={**os.environ, "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"},
+            )
+            # Tail of stdout for quick visibility (eval prints [EVAL_SUMMARY] near end)
+            tail = eval_proc.stdout[-2000:] if len(eval_proc.stdout) > 2000 else eval_proc.stdout
+            print(tail)
+            if eval_proc.returncode != 0:
+                print(f"[WARN] evaluate_policy.py exited with rc={eval_proc.returncode}")
+            if os.path.isfile(eval_report_path):
+                with open(eval_report_path) as f:
+                    evaluation_report = json.load(f)
+        else:
+            print("[WARN] No checkpoint found, skipping numerical eval.")
+
     # ── Step 5: Write phase report ──
     print("\n" + "=" * 60)
     print("[PHASE] Step 5: Writing phase report")
@@ -619,6 +696,15 @@ def main():
                 break
         suspicious_patterns = metrics_data.get("suspicious_patterns", [])
 
+    # Cross-signal warnings: combine convergence/suspicious + eval distribution shift
+    cross_signal_warnings: list[str] = []
+    eval_warnings = (evaluation_report or {}).get("warnings") or []
+    if any(p.get("severity") == "critical" for p in suspicious_patterns) and "obs_shift_magnitude_above_threshold" in eval_warnings:
+        cross_signal_warnings.append("training_anomaly_with_distribution_shift")
+    # Reward looks fine on training metrics but numerical eval flags multiple issues
+    if not suspicious_patterns and len(eval_warnings) >= 3:
+        cross_signal_warnings.append("clean_training_metrics_but_failed_eval")
+
     report = {
         "status": status,
         "early_stop_reason": early_stop_reason,
@@ -637,6 +723,11 @@ def main():
         "frame_paths": frame_paths,
         "training_time_seconds": round(training_time, 1),
         "checkpoint": find_latest_checkpoint(log_dir),
+        # auto_train v3 additions
+        "env_schema_paths": env_schema_paths,
+        "evaluation": evaluation_report,
+        "eval_report_path": eval_report_path,
+        "cross_signal_warnings": cross_signal_warnings,
     }
 
     report_path = os.path.join(log_dir, "phase_report.json")
@@ -677,6 +768,17 @@ def main():
                 health_parts.append(f"{label}: {val:.3f} ({status_str})")
         # Suspicious patterns count
         health_parts.append(f"suspicious: {len(suspicious_patterns)}")
+        # Numerical eval signals (auto_train v3)
+        if evaluation_report:
+            track = evaluation_report.get("tracking") or {}
+            surv = evaluation_report.get("survival") or {}
+            shift = evaluation_report.get("distribution_shift") or {}
+            ev_warn = evaluation_report.get("warnings") or []
+            health_parts.append(
+                f"eval: rmse_xy={track.get('lin_vel_xy_rmse')} rmse_yaw={track.get('yaw_rate_rmse')} "
+                f"alive_1000={surv.get('alive_at_1000_steps')} obs_shift={shift.get('obs_shift_magnitude')} "
+                f"warns={len(ev_warn)}"
+            )
         if health_parts:
             print(f"[HEALTH] {' | '.join(health_parts)}")
 

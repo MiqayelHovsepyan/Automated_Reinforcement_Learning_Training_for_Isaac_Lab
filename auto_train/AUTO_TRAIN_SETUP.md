@@ -27,14 +27,23 @@ Automated_Reinforcement_Learning_Training_for_Isaac_Lab/
     SKILL.md                     # Claude Code skill definition
     AUTO_TRAIN_SETUP.md          # This setup guide
     README.md                    # Project documentation
+    docs/
+      closed_loop_ood_test_report.md  # (v3) template for OOD validation results
     resources/                   # Python scripts
       __init__.py
-      run_phase.py               # orchestrator: train -> metrics -> play -> frames -> report
+      run_phase.py               # orchestrator: parse_env -> train -> metrics -> play -> frames -> evaluate_policy -> report
       train_with_overrides.py    # train.py + JSON override support
       analyze_metrics.py         # TensorBoard -> JSON + convergence + suspicious patterns
       play_for_inspection.py     # side-view camera play wrapper for gait inspection
       extract_frames.py          # MP4 -> PNG frames
       wait_for_phase.py          # blocks until training completes (replaces sleep-poll loop)
+      parse_env.py               # (v3) introspect registered task -> env_schema.{json,md}
+      evaluate_policy.py         # (v3) numerical eval + distribution shift -> eval_report.json
+      prior_art/
+        QUADRUPED_PRIOR_ART.md   # (v3) distilled cheatsheet auto-injected as tuner context
+        repos.md                 # (v3) full Isaac quadruped repo catalog (~100 repos)
+      tests/
+        test_parse_env.py        # (v3) ≥2-env unit tests for the env parser
 ```
 
 ### Step 2 — Copy the auto_train folder into your project
@@ -50,13 +59,15 @@ Your project structure should look like:
 your_project/
 ├── scripts/
 │   └── rsl_rl/
-│       ├── train.py          # (your existing train script)
-│       ├── play.py           # (your existing play script)
-│       └── cli_args.py       # (your existing CLI args)
+│       ├── train.py            # (your existing train script)
+│       ├── play.py             # (your existing play script)
+│       └── cli_args.py         # (your existing CLI args)
 ├── .claude/
 │   └── skills/
 │       └── auto_train/
 │           ├── SKILL.md
+│           ├── docs/
+│           │   └── closed_loop_ood_test_report.md   # (v3) OOD validation template
 │           ├── resources/
 │           │   ├── __init__.py
 │           │   ├── run_phase.py
@@ -64,13 +75,20 @@ your_project/
 │           │   ├── analyze_metrics.py
 │           │   ├── play_for_inspection.py
 │           │   ├── extract_frames.py
-│           │   └── wait_for_phase.py
+│           │   ├── wait_for_phase.py
+│           │   ├── parse_env.py            # (v3) env schema introspection
+│           │   ├── evaluate_policy.py      # (v3) numerical + distribution-shift eval
+│           │   ├── prior_art/
+│           │   │   ├── QUADRUPED_PRIOR_ART.md   # (v3) cheatsheet auto-injected
+│           │   │   └── repos.md                 # (v3) full repo catalog (grep on demand)
+│           │   └── tests/
+│           │       └── test_parse_env.py   # (v3) ≥2-env parser unit tests
 │           └── experiments/        # (created automatically)
 │               └── .scratch/
 └── logs/                           # (created automatically)
 ```
 
-**Why:** Everything is self-contained in one folder. The skill, scripts, and experiments all live together.
+**Why:** Everything is self-contained in one folder. The skill, scripts, prior-art docs, and experiments all live together.
 
 ### Step 3 — Adapt imports to your project
 
@@ -159,11 +177,12 @@ Examples:
 ### Step 4 — Walk away
 
 Claude will:
-1. Audit body coverage and analyze rewards before any training
-2. Run **5–15 short tuning iterations** (300–500 iters each) testing one hypothesis per run
-3. Pass a formal **Production Readiness Checklist** (velocity tracking, visual gait quality, no reward hacking, etc.)
-4. Run a final production training with the best config
-5. Bake winning parameters into source config
+1. **Inject grounded context** — auto-load `resources/prior_art/QUADRUPED_PRIOR_ART.md` (cheatsheet of surveyed-community reward / obs / DR / PPO ranges) and generate `env_schema.md` for this task via `parse_env.py` (v3)
+2. Audit body coverage and analyze rewards before any training
+3. Run **5–15 short tuning iterations** (300–500 iters each) testing one hypothesis per run, each iteration producing TensorBoard metrics, side-view frames, AND **numerical eval** (`eval_report.json` — tracking RMSE, gait, survival, posture, distribution shift) via `evaluate_policy.py` (v3)
+4. Pass a formal **Production Readiness Checklist** (8 gates: velocity tracking, visual gait quality, no reward hacking, sufficient iterations, convergence, body coverage, **numerical eval passes (v3)**, **distribution shift within bounds (v3)**)
+5. Run a final production training with the best config
+6. Bake winning parameters into source config
 
 ### Step 5 — Check results
 
@@ -177,7 +196,9 @@ The journal contains:
 - Per-iteration detailed metrics with convergence analysis
 - Cross-iteration comparison table (after iter 3+)
 - Visual assessment with CAN/CANNOT verification framework
-- Production readiness assessment (PASS/FAIL table)
+- **Numerical eval block** (v3): tracking RMSE, gait duty cycles, survival, posture, distribution-shift magnitude
+- **Cross-signal warnings** (v3): flags when training looks clean but eval fails, or vice versa
+- Production readiness assessment (8-gate PASS/FAIL table)
 - Post-production summary with recommended next steps
 
 ---
@@ -199,7 +220,7 @@ Continue auto-train, read journal at .claude/skills/auto_train/experiments/<name
 | Training runs for hours | Detached via `nohup setsid` — survives any timeout |
 | Claude blocks on a question | Forbidden — `AskUserQuestion` not in allowed-tools, and SKILL.md forbids all blocking operations including file creation confirmations |
 | Infinite loop | Hard cap at 15 tuning iterations |
-| Premature production run | Production Readiness Checklist requires 6 PASS criteria (velocity tracking, visual gait, body coverage, no reward hacking, sufficient iterations, convergence) |
+| Premature production run | Production Readiness Checklist requires 8 PASS criteria (velocity tracking, visual gait, body coverage, no reward hacking, sufficient iterations, convergence, numerical eval, distribution shift) |
 | Repeated failures | Aborts after 3 consecutive failures |
 | Reward hacking (hip-walking, etc.) | Body coverage audit + suspicious pattern detection + side-view camera + velocity tracking gate |
 | Misleading metrics | Convergence analysis detects early plateau; suspicious patterns flag when gait reward games velocity tracking |
@@ -211,6 +232,20 @@ Continue auto-train, read journal at .claude/skills/auto_train/experiments/<name
 | Bad override JSON | Pre-flight validation catches format errors before Isaac Sim boots |
 
 ---
+
+## What's New (v3)
+
+Addresses GitHub issue #2: "Improve auto_train reliability: add repo-aware context, verification loop, and OOD closed-loop tests."
+
+| Feature | v2 | v3 |
+|---------|----|----|
+| Tuner context | Claude re-reads env config from source each iteration | Auto-injected `QUADRUPED_PRIOR_ART.md` cheatsheet + programmatic `env_schema.md` (via `parse_env.py`) describing the exact reward / obs / action / event / curriculum structure. Deep reference `repos.md` (100+ Isaac quadruped repos) available for grep. |
+| Verification | Visual frames + TensorBoard only | Adds `evaluate_policy.py`: rollout-based tracking RMSE, foot contact pattern, energy, survival horizons, posture, action smoothness, plus distribution-shift check against training-time obs normalizer stats. Terrain-aware camera. |
+| Production Readiness Checklist | 6 criteria | 8 criteria — adds Numerical Eval gates and Distribution Shift gate. |
+| Phase report | metrics + convergence + frames | + `evaluation` (rollout metrics) + `env_schema_paths` + `cross_signal_warnings` (combines training anomalies with eval signals). |
+| OOD validation | None | `Isaac-Velocity-Flat-Ayg-OOD-v0` — sabotaged baseline for closed-loop tuner validation. Acceptance criterion: tuner pulls weights back to within prior-art ranges without manual intervention. Report template at `docs/closed_loop_ood_test_report.md`. |
+
+**Migration:** No changes required to existing user workflow. Run `/auto-train` as before; the new artifacts (`env_schema.{json,md}`, `eval_report.json`, `eval_video.mp4`) appear alongside the v2 outputs. The skill auto-loads the prior-art cheatsheet at iteration 1. Run `pytest .claude/skills/auto_train/resources/tests/test_parse_env.py` from the cf_lab venv to validate the parser locally.
 
 ## What's New (v2)
 

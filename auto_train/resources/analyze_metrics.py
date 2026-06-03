@@ -8,6 +8,12 @@
 Includes convergence detection, curve shape analysis, and suspicious pattern
 detection for automated RL training quality assessment.
 
+The numerical (rollout-based) signals — tracking RMSE, contact patterns, energy,
+survival, distribution shift — live in `evaluate_policy.py` and are merged into
+phase_report.json under the `evaluation` key by `run_phase.py`. Cross-signal
+warnings combining these with `suspicious_patterns` are computed in
+`run_phase.py` and surfaced as `cross_signal_warnings`.
+
 Usage:
     python .claude/skills/auto_train/resources/analyze_metrics.py --log-dir <path> [--output <path>/metrics.json]
 """
