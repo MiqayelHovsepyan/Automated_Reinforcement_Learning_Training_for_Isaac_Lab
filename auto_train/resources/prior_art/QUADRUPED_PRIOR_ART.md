@@ -27,6 +27,12 @@ observed across repos for flat-terrain velocity tracking on an ANYmal-class
 quadruped (mass ~10–50 kg, leg ~0.3–0.6 m, target ~1 m/s). Scale roughly by
 mass/dimension when porting to a different morphology.
 
+> **AYG mass note:** the real AYG is **~23.5 kg total** (Base 9.15 + 2× battery
+> 1.6 + 4 legs × 2.7 + camera 0.39). Several reference quadrupeds in the
+> surveyed repos (Go1, A1) sit at 10–15 kg, so torque / energy / mass-DR
+> magnitudes scale up by ~1.5–2.4× on AYG. Account for this when comparing
+> AYG reward weights against legged_gym-derived defaults.
+
 ### Load-bearing terms (always present)
 
 | Term | Function | Typical weight | Notes |
@@ -111,7 +117,7 @@ sim-to-real focused repos; gentler ranges in vanilla velocity tasks.
 |-------|------|-------|---------------------------|
 | Friction | startup | static 0.4–2.0, dynamic 0.4–2.0 | Both bounds widely used (IsaacLab, robot_lab, IIT-DLS). Going below 0.3 destabilizes early training. |
 | Restitution | startup | 0.0–0.0 (flat) up to 0.0–0.5 (parkour) | Default 0 is fine for flat. |
-| Base mass | startup | (−1.0, +3.0) kg add (AYG default) ; (±1.5) kg for ~10 kg robots | Add-mode common; multiply-mode rarer. |
+| Base mass | startup | (−1.0, +3.0) kg add (AYG default); ±15–30% multiply preferred for sim-to-real | AYG total mass is **~23.5 kg** (Base 9.15 + 2 batteries × 1.6 + 4 legs × 2.7 + camera 0.39), NOT the ~10 kg ANYmal-class baseline. Current AYG range (−1, +3) kg = only −4% / +13% on a 23.5 kg robot, narrower than the surveyed ±15–30% range. Consider widening if sim-to-real transfer is weak. |
 | Base COM offset | startup | x,y: ±0.05 m; z: ±0.01 m | Tighter z because most quadrupeds are z-stable. |
 | Joint stiffness/damping | startup | ±20% multiply | Optional but improves sim-to-real (LeggedLab, robot_lab). |
 | Reset base | reset | pose: x,y ±0.5 m, yaw ±π; velocity: zeros | Yaw full-range randomization is universal. |

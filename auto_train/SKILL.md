@@ -203,7 +203,7 @@ Before starting any training, you MUST analyze each reward term mathematically:
 
 1. **Read every reward term's formula** from the env config (weight, function, parameters)
 2. **Compute theoretical max/min** for each term given robot physical params:
-   - Robot dimensions: ~0.3m leg length, ~10kg mass, designed for ~1 m/s walking speed
+   - Robot dimensions (AYG): ~0.3m leg length, **~23.5 kg total mass** (Base 9.15 + 2× battery 1.6 + 4 legs × 2.7 + camera 0.39), designed for ~1 m/s walking speed. Do not assume the legged_gym ~10 kg ANYmal-class baseline; AYG is ~2.35× heavier, which shifts torque / energy / DR-magnitude expectations proportionally.
    - Consider: at target velocity, what is the realistic swing phase duration? foot travel distance? joint velocities?
 3. **Check threshold feasibility** — Example: if `feet_air_time` threshold is 0.5s and the robot walks at 1 m/s, each foot would need to travel ~0.5m in the air. For a robot with 0.3m legs, this is physically unrealistic.
 4. **Identify terms likely to be negative/zero** and explain why
