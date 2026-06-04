@@ -58,6 +58,11 @@ parser.add_argument(
     "--camera-azimuth", type=float, default=90.0,
     help="Camera azimuth angle in degrees. 0=front, 90=side, 180=back. Default: 90 (side view)"
 )
+parser.add_argument(
+    "--zero_command", action="store_true", default=False,
+    help="Force ALL envs to a zero base-velocity command (rel_standing_envs=1.0) to inspect/measure "
+         "zero-command standing. Prints standing metrics (base vel, joint vel, foot lifts) at the end."
+)
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
 # append AppLauncher cli args
@@ -115,6 +120,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # Force small number of envs for clear visibility
     env_cfg.scene.num_envs = args_cli.num_envs
+
+    # ── Zero-command standing inspection ──
+    if args_cli.zero_command:
+        # Command ALL envs to stand still (UniformVelocityCommand zeroes the command for standing envs).
+        env_cfg.commands.base_velocity.rel_standing_envs = 1.0
+        print("[INSPECT] zero_command mode: rel_standing_envs=1.0 → all robots commanded to STAND STILL.")
 
     # ── Override camera for side-view inspection ──
     # Convert azimuth to camera position relative to robot
@@ -200,6 +211,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # reset environment
     obs = env.get_observations()
     timestep = 0
+    # zero-command standing metric accumulators
+    robot = env.unwrapped.scene["robot"] if args_cli.zero_command else None
+    ss_lin = ss_ang = ss_jvel = ss_feet_air = 0.0
+    ss_n = 0
     # simulate environment
     while simulation_app.is_running():
         start_time = time.time()
@@ -211,10 +226,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             obs, _, dones, _ = env.step(actions)
             # reset recurrent states for episodes that have terminated
             policy_nn.reset(dones)
+        if args_cli.zero_command and robot is not None:
+            # accumulate standing-still quality (lower = stiller). Skip first 20 steps (settling).
+            if timestep >= 20:
+                ss_lin += float(torch.norm(robot.data.root_lin_vel_b[:, :2], dim=1).mean())
+                ss_ang += float(robot.data.root_ang_vel_b[:, 2].abs().mean())
+                ss_jvel += float(robot.data.joint_vel.abs().sum(dim=1).mean())
+                try:
+                    cs = env.unwrapped.scene.sensors["contact_forces"]
+                    foot_ids = cs.find_bodies(".*_Foot")[0]
+                    ss_feet_air += float((cs.data.current_air_time[:, foot_ids] > 0.0).float().sum(dim=1).mean())
+                except Exception:
+                    pass
+                ss_n += 1
         if args_cli.video:
             timestep += 1
             # Exit the play loop after recording one video
             if timestep == args_cli.video_length:
+                break
+        elif args_cli.zero_command:
+            timestep += 1
+            if timestep >= 300:
                 break
 
         # time delay for real-time evaluation (skip in headless/video mode for speed)
@@ -222,6 +254,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             sleep_time = dt - (time.time() - start_time)
             if sleep_time > 0:
                 time.sleep(sleep_time)
+
+    # report zero-command standing metrics
+    if args_cli.zero_command and ss_n > 0:
+        print("[STAND_STILL] zero-command standing metrics (mean over steps; lower = stiller):")
+        print(f"[STAND_STILL]   base_lin_vel_xy : {ss_lin / ss_n:.4f} m/s   (target ~<0.05)")
+        print(f"[STAND_STILL]   base_ang_vel_z  : {ss_ang / ss_n:.4f} rad/s (target ~<0.05)")
+        print(f"[STAND_STILL]   joint_vel_l1_sum: {ss_jvel / ss_n:.3f} rad/s (12 joints)")
+        print(f"[STAND_STILL]   feet_airborne   : {ss_feet_air / ss_n:.3f} /4 (target ~0 = no stepping)")
 
     # close the simulator
     env.close()
