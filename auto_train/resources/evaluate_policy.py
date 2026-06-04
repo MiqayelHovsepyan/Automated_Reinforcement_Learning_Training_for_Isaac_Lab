@@ -47,7 +47,9 @@ import cli_args  # isort: skip
 
 parser = argparse.ArgumentParser(description="Evaluate a trained policy with numerical metrics + video.")
 parser.add_argument("--task", type=str, required=True, help="Play-variant task id, e.g. Isaac-Velocity-Flat-Ayg-Play-v0")
-parser.add_argument("--checkpoint", type=str, required=True, help="Path to model_*.pt checkpoint")
+# NOTE: --checkpoint is provided by cli_args.add_rsl_rl_args() (dest=checkpoint); do not redefine here
+# (cli_args drift added --checkpoint, which previously caused an argparse conflict). It is required in practice;
+# we validate presence after parsing.
 parser.add_argument("--report-path", type=str, required=True, help="Where to write eval_report.json")
 
 parser.add_argument("--eval-steps", type=int, default=1000, help="Steps to roll out per env (default 1000 ≈ 20 s @ 50 Hz)")
@@ -68,6 +70,9 @@ parser.add_argument("--seed", type=int, default=None)
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
+
+if not args_cli.checkpoint:
+    parser.error("--checkpoint is required (path to model_*.pt)")
 
 # Force-enable cameras if recording video
 if args_cli.video:
@@ -124,7 +129,19 @@ def _safe_tensor_to_numpy(t):
         return None
     if isinstance(t, torch.Tensor):
         return t.detach().cpu().numpy()
-    return np.asarray(t)
+    # rsl-rl / Isaac Lab may hand back (obs, extras) tuples or dict/TensorDict obs.
+    if isinstance(t, (tuple, list)):
+        return _safe_tensor_to_numpy(t[0]) if len(t) else None
+    if hasattr(t, "items"):  # dict / TensorDict — prefer the policy group
+        if "policy" in t:
+            return _safe_tensor_to_numpy(t["policy"])
+        for v in t.values():
+            return _safe_tensor_to_numpy(v)
+        return None
+    try:
+        return np.asarray(t)
+    except Exception:
+        return None
 
 
 def _extract_obs_normalizer(runner) -> dict | None:
